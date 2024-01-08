@@ -79,13 +79,12 @@ def get_statistics_receipt(
     receipt_edit_distance=False,
     return_refined_parses=False,
 ):
-
     gt = refine_parse_receipt(gt)["parse"] if receipt_refine else gt["parse"]
     pr = refine_parse_receipt(pr)["parse"] if receipt_refine else pr["parse"]
     label_stats = stats["label_stats"]
     group_stats = stats["group_stats"]
 
-    mat = np.zeros((len(gt), len(pr)), dtype=np.int)
+    mat = np.zeros((len(gt), len(pr)), dtype=np.int64)
     for i, gr1 in enumerate(gt):
         for j, gr2 in enumerate(pr):
             mat[i][j] = get_group_compare_score(gr1, gr2)

@@ -2,7 +2,6 @@
 # Copyright (c) 2021-present NAVER Corp.
 # Apache License v2.0
 
-import time
 from pathlib import Path
 from typing import List, Union
 
@@ -88,7 +87,6 @@ class SpadeDataModule(pl.LightningDataModule):
         return dev_data, test_data
 
     def _prepare_test_datas_include_ocr_input(self):
-
         dev_data = get_data(
             self.path_data_folder / self.data_paths["dev"],
             "test",
@@ -436,8 +434,8 @@ class SpadeData(torch.utils.data.Dataset):
             "text_tok": text_tok,
             "text_tok_id": torch.as_tensor(text_tok_id),
             "label": torch.as_tensor(label) if self.mode != "infer" else label,
-            "label_tok": torch.as_tensor(label_tok),
-            "rn_center_tok": torch.as_tensor(rn_center_tok),
+            "label_tok": torch.as_tensor(np.array(label_tok)),
+            "rn_center_tok": torch.as_tensor(np.array(rn_center_tok)),
             "rn_dist_tok": torch.as_tensor(rn_dist_tok),
             "rn_angle_tok": torch.as_tensor(rn_angle_tok),
             "vertical_tok": torch.as_tensor(vertical_tok),
@@ -492,11 +490,11 @@ class SpadeData(torch.utils.data.Dataset):
         direction_vec = []
         direction_vec_tok = []
 
-        header_tok = np.ones(len(text), dtype=np.int)
+        header_tok = np.ones(len(text), dtype=np.int64)
         r_pnt = self.n_fields - 1
         c_pnt = -1
 
-        label_sub = [np.array(label1, dtype=np.int) for label1 in label]
+        label_sub = [np.array(label1, dtype=np.int64) for label1 in label]
         for i, sub_features1 in enumerate(zip(text, coord, vertical)):
             text1, coord1, vertical1 = sub_features1
             text_tok1 = du.tokenizing_func(self.tokenizer, text1)

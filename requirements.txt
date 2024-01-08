@@ -1,13 +1,27 @@
-opencv-python-headless==4.5.2.54
-numpy==1.19.5
-pytorch-lightning==1.3.1
-torchmetrics==0.3.2
-transformers==4.5.1
-pytest==6.2.3
-munch==2.5.0
-nltk==3.6.2
+# original versions
+# opencv-python-headless==4.5.2.54
+# numpy==1.19.5
+# pytorch-lightning==1.3.1
+# torchmetrics==0.3.2
+# transformers==4.5.1
+# pytest==6.2.3
+# munch==2.5.0
+# nltk==3.6.2
 
 
---find-links https://download.pytorch.org/whl/torch_stable.html
-torch==1.8.1+cu101
-torchvision==0.9.1+cu101
+# --find-links https://download.pytorch.org/whl/torch_stable.html
+# torch==1.8.1+cu101
+# torchvision==0.9.1+cu101
+
+# new version 
+--extra-index-url https://nexus.baemin.in/repository/pypi/simple https://download.pytorch.org/whl/cu118
+woowa_ml_sdk==0.7.2
+torch==1.13.1
+torchvision==0.14.1
+pytorch-lightning==2.1.3
+transformers==4.33.0
+datasets==2.14.0
+opencv-python==4.9.0.80
+nltk==3.8.1
+munch==4.0.0
+tensorboardX==2.6.2.2

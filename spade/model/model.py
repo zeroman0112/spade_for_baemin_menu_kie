@@ -3,12 +3,10 @@
 # Apache License v2.0
 
 import os
-import time
 from copy import deepcopy
 from itertools import zip_longest
 from pathlib import Path
 from pprint import pprint
-from typing import Any, List
 
 import pytorch_lightning as pl
 import torch
@@ -69,6 +67,10 @@ class RelationTagger(pl.LightningModule):
             hparam.encoder_backbone_name
         )
 
+        self.training_step_outputs = []
+        self.validation_step_outputs = []
+        self.test_step_outputs = []
+
     def forward(
         self,
         text_tok_ids,
@@ -123,7 +125,6 @@ class RelationTagger(pl.LightningModule):
         l_toks,
         lmax_toks,
     ):
-
         # 1. split features that have len > 512
         (
             text_tok_ids,
@@ -203,7 +204,6 @@ class RelationTagger(pl.LightningModule):
 
     # @gu.timeit
     def _run(self, mode, batch):
-
         # 1. Batchwise collection of features
         (
             data_ids,
@@ -349,7 +349,9 @@ class RelationTagger(pl.LightningModule):
             results["l_units"],
             self.cross_entropy_loss_weight,
         )
-        self.log("training_loss", loss, sync_dist=True)
+        self.log(
+            "training_loss", loss, sync_dist=True, batch_size=self.tparam.batch_size
+        )
         out = {"loss": loss}
 
         if gu.get_local_rank() == 0:
@@ -362,9 +364,12 @@ class RelationTagger(pl.LightningModule):
                 "pr_label_units": results["pr_label_units"],
             }
             out.update({"training_out": training_out})
+
+        self.training_step_outputs.append(out)
         return out
 
-    def training_epoch_end(self, outputs) -> None:
+    def on_train_epoch_end(self) -> None:
+        outputs = self.training_step_outputs
         if gu.get_local_rank() == 0:
             losses = [x["loss"] for x in outputs]
             avg_loss = torch.mean(torch.stack(losses))
@@ -377,6 +382,7 @@ class RelationTagger(pl.LightningModule):
             print(
                 f"Epoch {self.current_epoch}, average training loss: {avg_loss.item()}"
             )
+        self.training_step_outputs.clear()
 
     def validation_step(self, batch, batch_idx):
         results = self._run("test", batch)
@@ -388,7 +394,9 @@ class RelationTagger(pl.LightningModule):
             self.cross_entropy_loss_weight,
         )
 
-        self.log("validation_loss", loss, sync_dist=True)
+        self.log(
+            "validation_loss", loss, sync_dist=True, batch_size=self.tparam.batch_size
+        )
         val_out = {
             "data_ids": results["data_ids"],
             "loss": loss,
@@ -412,9 +420,11 @@ class RelationTagger(pl.LightningModule):
             tp_edge, fp_edge, fn_edge, tp_parse, fp_parse, fn_parse
         )
 
+        self.validation_step_outputs.append(val_out)
         return val_out
 
-    def validation_epoch_end(self, outputs):
+    def on_validation_epoch_end(self):
+        outputs = self.validation_step_outputs
         # 1. Reduce validation results
         (
             precision_edge_avg,
@@ -482,6 +492,7 @@ class RelationTagger(pl.LightningModule):
                     print(f"Validation result at epoch {self.current_epoch}")
                     print(f"{validation_score_dict}")
                     rtu.print_parsing_result(parses, pr_parses)
+        self.validation_step_outputs.clear()
 
     def configure_optimizers(self):
         optimizer = get_optimizer(self.tparam, self)
@@ -529,16 +540,19 @@ class RelationTagger(pl.LightningModule):
             tp_edge, fp_edge, fn_edge, tp_parse, fp_parse, fn_parse
         )
 
+        self.test_step_outputs.append(test_out)
         return test_out
 
     @rank_zero_only
-    def test_epoch_end(self, outputs: List[Any]) -> None:
+    def on_test_epoch_end(self) -> None:
+        outputs = self.test_step_outputs
         if self.hparam.task == "receipt_v1":
             self.test_epoch_end_receipt_v1(outputs)
         elif self.hparam.task == "funsd":
             self.test_epoch_end_funsd(outputs)
         else:
             raise NotImplementedError
+        self.test_step_outputs.clear()
 
     @rank_zero_only
     @gu.timeit

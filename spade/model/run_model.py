@@ -37,7 +37,7 @@ def prepare_data_model_trainer(cfg):
             new_snapshot["state_dict"] = snapshot["model"]
             torch.save(new_snapshot, cfg.model_param.path_trained_model)
 
-        model = model.load_from_checkpoint(
+        model = RelationTagger.load_from_checkpoint(
             cfg.model_param.path_trained_model,
             hparam=cfg.model_param,
             tparam=cfg.train_param,
@@ -50,15 +50,18 @@ def prepare_data_model_trainer(cfg):
     trainer = pl.Trainer(
         logger=tb_logger,
         log_every_n_steps=cfg.train_param.get("log_every_n_steps", 50),
-        gpus=torch.cuda.device_count(),
+        # gpus=torch.cuda.device_count(),
+        devices="auto",
         max_epochs=cfg.train_param.max_epochs,
         val_check_interval=cfg.train_param.val_check_interval,
         limit_train_batches=cfg.train_param.limit_train_batches,
         limit_val_batches=cfg.train_param.limit_val_batches,
-        num_sanity_val_steps=1,
-        progress_bar_refresh_rate=100,
+        num_sanity_val_steps=2,
+        # progress_bar_refresh_rate=100,
+        # enable_progress_bar=True,
         accumulate_grad_batches=cfg.train_param.accumulate_grad_batches,
         accelerator=cfg.train_param.accelerator,
+        strategy=cfg.train_param.strategy,
         precision=cfg.model_param.precision,
         gradient_clip_val=cfg.train_param.gradient_clip_val,
         gradient_clip_algorithm=cfg.train_param.gradient_clip_algorithm,

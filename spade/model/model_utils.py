@@ -187,7 +187,7 @@ def get_split_param1(text_tok, max_input_len, input_split_overlap_len, do_split=
             n_sep = 1
         else:
             n_sep = int(math.ceil((l_tok - max_input_len) / step_size)) + 1
-        ed_arr = np.arange(max_input_len, l_tok, step_size, dtype=np.int).tolist()
+        ed_arr = np.arange(max_input_len, l_tok, step_size, dtype=np.int64).tolist()
         ed_arr.append(l_tok)
         assert n_sep == len(ed_arr)
 
@@ -257,7 +257,7 @@ def pad_ids(ids, max_length=None, type_informer_tensor=None):
         my_long = torch.long
     else:
         my_zeros = np.zeros
-        my_long = np.long
+        my_long = np.longlong
 
     ids_tensor = my_zeros([batch_size] + dim * [max_length], dtype=my_long)
 
@@ -686,7 +686,6 @@ class RelationTaggerUtils:
         pr_parses,
         parse_refine_options,
     ):
-
         tp_edge, fn_edge, fp_edge = au.cal_tp_fn_fp_of_edges(
             label_units, pr_label_units
         )

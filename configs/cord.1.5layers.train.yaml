@@ -98,7 +98,7 @@ model_param:
   no_rel_attention: false
   omit_angle_cal: false
   parse_gen_method: single_beam
-  precision: 16
+  precision: 16-mixed
   pre_layer_norm: true
   task: receipt_v1
   task_lan: ind
@@ -119,11 +119,12 @@ model_param:
 toy_data: false
 toy_size: 4
 train_param:
-  accelerator: ddp
+  accelerator: gpu 
+  strategy: ddp
   accumulate_grad_batches: 2
   augment_coord: true
   augment_data: true
-  batch_size: 2
+  batch_size: 2 
   batch_size_for_test: 2
   coord_aug_params_keys: '[n_min, n_max, amp_min, amp_max, angle_min, angle_max],  [0,
     2, -15, 15, -10, 10]'

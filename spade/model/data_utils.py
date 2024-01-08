@@ -2,16 +2,13 @@
 # Copyright (c) 2021-present NAVER Corp.
 # Apache License v2.0
 
-import base64
 import json
 import os
 import random as python_random
-import urllib
 from functools import reduce
 
 import numpy as np
 import requests
-from PIL import Image, ImageFile
 
 import spade.utils.general_utils as gu
 from spade.utils.data_augmentation_utils import image_rotation, image_warping
@@ -400,7 +397,6 @@ def gen_adj_mat_f_and_cols(
             # + 1000000 to avoid the case where col_id == field_id which casues duplicate field to first boxes edges.
 
         for i_feat, feature1 in enumerate(feature):
-
             is_key = feature1[5]
             assert is_key == 0 or is_key == 1
 
@@ -675,7 +671,6 @@ def gen_unused_text_span_from_unused_char_ids(char_unused):
         i_char = i + 1
 
         if char_flag:
-
             if span1 is None:
                 st = i_char
                 span1 = [st, None]
@@ -903,7 +898,7 @@ def get_adj_mat_funsd(fields, field_rs, raw_data1):
     row_offset = n_field
 
     cols = []
-    adj_mat_fg = np.zeros([2, n_field + l_word, l_word], dtype=np.int)
+    adj_mat_fg = np.zeros([2, n_field + l_word, l_word], dtype=np.int64)
     i_col = -1
     for i_form, form1 in enumerate(form):
         word = form1["words"]
@@ -1187,7 +1182,7 @@ def char_height_normalization(n_char_unit, char_height):
     lb = 0
     ub = n_char_unit
     new_arr = np.clip(char_height / unit_len, lb, ub)
-    return new_arr.astype(np.int)
+    return new_arr.astype(np.int64)
 
 
 def dist_normalization(
@@ -1199,16 +1194,16 @@ def dist_normalization(
     if dist_norm == "char_height":
         unit_len = np.median(char_height)
     elif dist_norm == "img_diagonal":
-        unit_len = np.sqrt(w ** 2 + h ** 2) / n_dist_unit
+        unit_len = np.sqrt(w**2 + h**2) / n_dist_unit
     else:
         raise NotImplementedError
 
     lb = 0 if all_positive else -n_dist_unit
     ub = n_dist_unit
     new_arr = np.clip(arr / unit_len, lb, ub)
-    return new_arr.astype(np.int)
+    return new_arr.astype(np.int64)
 
 
 def angle_normalization(n_angle_unit, arr):
     new_arr = np.clip(arr / (2 * np.pi) * n_angle_unit, 0, n_angle_unit)
-    return new_arr.astype(np.int)
+    return new_arr.astype(np.int64)

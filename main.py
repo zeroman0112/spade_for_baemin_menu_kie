@@ -2,6 +2,7 @@
 # Copyright (c) 2021-present NAVER Corp.
 # Apache License v2.0
 import argparse
+import torch
 
 from spade import Agent, ConfigManager
 
@@ -10,6 +11,7 @@ def main():
     args = get_args()
     cfg = ConfigManager(args.config_dir, args.config_file_name).cfg
     agent = Agent(cfg)
+    torch.set_float32_matmul_precision("medium")
     if args.mode == "preprocess":
         agent.do_preprocess()
     elif args.mode == "train":
