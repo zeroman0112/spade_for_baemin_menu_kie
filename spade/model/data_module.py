@@ -210,6 +210,15 @@ class SpadeDataModule(pl.LightningDataModule):
 
 
 def get_data(fpath, mode, cfg, tokenizer, is_json=False):
+    """jsonl 파일을 읽어서 torch.utils.data.Dataset 형태로 반환
+    Args:
+        fpath: jsonl 파일 경로
+        mode: "train" or "test"
+        cfg: spade.utils.ConfigManager
+        tokenizer: Transformers 토크나이저
+    Returns:
+        dataset: torch.utils.data.Dataset
+    """
     if is_json:
         raw_data = [gu.load_json(fpath)]
     else:
@@ -219,7 +228,16 @@ def get_data(fpath, mode, cfg, tokenizer, is_json=False):
 
 
 class SpadeData(torch.utils.data.Dataset):
-    def __init__(self, raw_data, mode, cfg, tokenizer, fpath):
+    def __init__(self, raw_data: list[dict], mode: str, cfg, tokenizer, fpath):
+        """
+        Args:
+            raw_data (list[dict]): jsonl 파일을 읽어서 반환된 리스트. jsonl은 한 줄에 하나의 json object가 있는 파일 형식
+            mode (str): "train" or "test"
+            cfg (munch.Munch): configuration
+            tokenizer (transformers.tokenization_*) : transformers 토크나이저
+            fpath (pathlib.PosixPath): jsonl 파일 경로
+        """
+
         self.task = cfg.model_param.task
         self.mode = mode
 
@@ -228,19 +246,23 @@ class SpadeData(torch.utils.data.Dataset):
         self.field_rs = cfg.model_param.field_representers
         self.n_fields = len(self.fields)
 
-        self.method_for_token_xy_generation = cfg.method_for_token_xy_generation
-        self.dist_norm = cfg.dist_norm
+        self.method_for_token_xy_generation = (
+            cfg.method_for_token_xy_generation
+        )  # e.g. "equal_division"
+        self.dist_norm = cfg.dist_norm  # e.g. "img_diagonal"
         self.n_dist_unit = cfg.model_param.n_dist_unit
         self.n_char_unit = cfg.model_param.n_char_unit
         self.n_angle_unit = cfg.model_param.n_angle_unit
         self.omit_angle_cal = cfg.model_param.omit_angle_cal
 
+        # parameters for data augmentation
         self.augment_data = cfg.train_param.augment_data
         self.token_aug_param = cfg.train_param.initial_token_aug_params
         self.augment_coord = (cfg.train_param.augment_coord,)
         self.coord_aug_params = cfg.train_param.initial_coord_aug_params
 
-        self.raw_data_input_type = cfg.raw_data_input_type
+        self.raw_data_input_type = cfg.raw_data_input_type  # e.g. "type0", "type1"
+        print(self.raw_data_input_type)
 
         self.data = self._normalize_raw_data(raw_data)
 
@@ -379,6 +401,16 @@ class SpadeData(torch.utils.data.Dataset):
         augment_coord,
         coord_aug_params,
     ):
+        """
+        Args:
+            data (dict): json object including OCR results,
+                semantic label on text boxes and relation label between text boxes
+            augment_data (bool): whether to augment data
+            token_aug_params (list[int]): token augmentation parameters
+            augment_coord (bool): whether to augment coordinates of text boxes
+            coord_aug_params (list[int]): coord augmentation parameters
+
+        """
         if augment_data:
             assert self.mode == "train"
 
@@ -396,6 +428,7 @@ class SpadeData(torch.utils.data.Dataset):
         if self.mode == "infer":
             (text, coord, vertical) = du.remove_blank_box(text, coord, vertical)
 
+        # apply random image warping and rotation on images and text box coordinates
         if augment_coord:
             img = None
             clip_box_coord = True
@@ -472,8 +505,45 @@ class SpadeData(torch.utils.data.Dataset):
         return data_id, text, coord, vertical, label, img_sz, img_feature, image_url
 
     def _tokenize_feature(
-        self, text, coord, vertical, label, augment_data, token_aug_params
+        self, text: list[str], coord, vertical, label, augment_data, token_aug_params
     ):
+        """
+        Args:
+            text (list[str]): list of infer text from OCR result
+            coord (list[list[list[int]]]): list of coordinates of text boxes of shape (n_text, 4, 2)
+            vertical (list[bool]): list of vertical flag of text boxes
+            label (list[list[list[int]]]): semantic label and group label on text boxes
+                of shape (2, n_field + n_text, n_text)
+            augment_data (bool): whether to augment data
+            token_aug_params (list[int]): token augmentation parameters
+
+        Returns:
+            text_tok (list[list[str]]): list of list of tokens from OCR result.
+                len(text_tok) = n_boxes
+                text_tok[i] = list of tokens from the i-th text box (e.g. ["hello", "world"])
+            coord_tok (list[list[list[int]]]): list of coordinates of text tokens
+                len(coord_tok) = n_boxes. coord_tok[i] = list of coordinates of tokens from the i-th text box
+            direction_vec (list[list[int]]): list of direction vectors of text boxes
+                len(direction_vec) = n_boxes,
+                direction_vec[i] = i번째 text box의 짧은 변들의 중심점을 연결한 벡터
+            direction_vec_tok (list[list[list[int]]]): list of direction vectors of text tokens
+                len(direction_vec_tok) = n_boxes
+                direction_vec_tok[i] = [direction_vec] * len(text_tok[i])
+            vertical_tok (list[list[bool]]): list of vertical flag of text tokens
+                len(vertical_tok) = n_boxes
+                vertical_tok[i] = [ith_text_box_is_vertical] * len(text_tok[i])
+            char_size_tok (list[list[float]]): list of char size of text tokens
+                len(char_size_tok) = n_boxes
+                vertical_tok[i] = [ith_text_box_char_size] * len(text_tok[i])
+                ith_text_box_char_size = i번째 text box의 긴 변들의 평균 길이
+            label_tok (list[np.ndarray]): semantic label and group label on text tokens
+                len(label_tok) = 2
+                label_tok[0] = semantic relation label on text tokens which is represented as adjacent matrix
+                label_tok[1] = group relation label on text tokens which is represented as adjacent matrix
+            header_tok (np.ndarray): indicator which token is a header token of shape (n_total_tokens,)
+                n_total_tokens = 모든 text box에서 나온 tokens의 개수
+                header_tok[i] = 1 if the i-th token is a header token else 0
+        """
         if self.mode != "infer":
             pass
         else:
@@ -482,33 +552,52 @@ class SpadeData(torch.utils.data.Dataset):
             label = np.zeros([1, self.n_fields + len(text), len(text)])
 
         rel_idx = 1
-
+        # len(text_tok) = n_boxes
+        # text_tok[i] = list of tokens from the i-th text box (e.g. ["hello", "world"])
         text_tok = []
+        # len(vertical_tok) = n_boxes
+        # vertical_tok[i] = list of is_vertical from the i-th text box
         vertical_tok = []
+        # len(coord_tok) = n_boxes
+        # coord_tok[i] = i번째 text box 에서 추출한 token 각각의 좌표 (e.g. [[x1, y1], [x2, y2], [x3, y3], [x4, y4]])
         coord_tok = []
+        # len(char_size_tok) = n_boxes
+        # char_size_tok[i] = text box의 긴변의 평균
         char_size_tok = []
+        # len(direction_vec) = n_boxes
+        # direction_vec[i] = i번째 text box의 짧은 변들의 중심점을 연결한 벡터
         direction_vec = []
-        direction_vec_tok = []
+        # direction_vec_tok[i] = [direction_vec] * len(text_tok[i])
+        direction_vec_tok = []  # shape of (n_boxes, n_tokens, 2)
 
         header_tok = np.ones(len(text), dtype=np.int64)
-        r_pnt = self.n_fields - 1
-        c_pnt = -1
+        r_pnt = self.n_fields - 1  # row pointer for label which is adjacent matrix
+        c_pnt = -1  # column pointer for label which is adjacent matrix
 
         label_sub = [np.array(label1, dtype=np.int64) for label1 in label]
         for i, sub_features1 in enumerate(zip(text, coord, vertical)):
+            # vertical = Whether the text box is vertical or not
             text1, coord1, vertical1 = sub_features1
             text_tok1 = du.tokenizing_func(self.tokenizer, text1)
+            # randomly replace some text tokens with other tokens
+            # 메뉴 입력 자동화 모델에는 사용 안하는게 나을듯
             if augment_data:
                 text_tok1 = du.gen_augmented_text_tok1(
                     self.token_pool, text_tok1, token_aug_params
                 )
             l_tok1 = len(text_tok1)
             coord1 = [np.array(xy) for xy in coord1]
+            # repeat vetical1 as many as the number of tokens
             vertical_tok1 = du.augment_vertical(vertical1, l_tok1)
 
-            csz = du.get_char_size1(coord1, vertical1)
+            # text box에서 긴쪽 변의 평균 길이 계산
+            csz: float = du.get_char_size1(coord1, vertical1)
+            # csz_tok1 = [csz] * l_tok1
             csz_tok1 = du.augment_char_size(csz, l_tok1)
 
+            # du.augment_coord 랑 self.augment_coord 랑 햇갈림. 변수이름 바꾸는게 좋을듯
+            # text에서 추출한 각 토큰에 대한 좌표를 할당
+            # method_for_token_xy_generation = "equal_division" 인 경우, text box를 토큰 수만큼 쪼개서 할당
             coord_tok1, direction_vec_tok1 = du.augment_coord(
                 coord1,
                 vertical1,
@@ -539,10 +628,17 @@ class SpadeData(torch.utils.data.Dataset):
             c_pnt += 1
 
             # update header_tok
+            # header_tok[i] = 1 if the i-th token is a header token else 0
+            # 이 시점에서 c_pnt는 현재 텍스트 박스의 첫번재 토큰을 가리킴
             for i in range(l_tok1 - 1):
                 header_tok = np.insert(header_tok, obj=c_pnt + 1, values=0, axis=0)
             # upate label_sub
-            label_type = ["f", "g", "root"]
+            label_type = ["f", "g", "root"]  # f는 fields인 것 같고 g는 group, root는 모르겠음
+            # text box 기준으로 된 label을 token 레벨에 맞게 수정
+            # field relation의 경우 i번째 텍스트 박스에서 j번째 텍스트 박스로 연결을
+            # i번째 텍스트 박스의 마지막 토큰에서 j번째 텍스트 박스의 첫번째 토큰 연결로 수정
+            # group relation의 경우 i번째 텍스트 박스에서 j번째 텍스트 박스로 연결을
+            # i번째 텍스트 박스의 첫번째 토큰(header token)에서 j번째 텍스트 박스의 첫번째 토큰 연결로 수정
             for i_label, label_sub1 in enumerate(label_sub):
                 label_sub1, r_pnt_out, c_pnt_out = du.update_label_sub(
                     l_tok1, rel_idx, r_pnt, c_pnt, label_sub1, label_type[i_label]

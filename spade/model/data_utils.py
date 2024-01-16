@@ -17,12 +17,13 @@ from spade.utils.data_augmentation_utils import image_rotation, image_warping
 def gen_augmented_coord(
     img, coord, img_sz, coord_aug_params, clip_box_coord, normalize_amp=False
 ):
+    """apply image warping and rotation"""
     if img is None:
         width_and_height = img_sz["width"], img_sz["height"]
     else:
         width_and_height = img.shape[1], img.shape[0]
 
-    if type(coord_aug_params[0]) == list:
+    if type(coord_aug_params[0]) is list:
         param_w1, param_w2, param_r = coord_aug_params
         n_min1, n_max1, amp_min1, amp_max1 = param_w1
         n_min2, n_max2, amp_min2, amp_max2 = param_w2
@@ -120,6 +121,14 @@ def gen_token_pool(raw_data_type, tokenizer, normalized_raw_data):
 
 
 def gen_token_pool_from_feature(raw_data_type, tokenizer, normalized_raw_data):
+    """모든 데이터의 OCR 결과들을 토큰으로 변환해서 리스트로 합침
+    Args:
+        raw_data_type (str): "type0" or "type1"
+        tokenizer (object): transformers.BertTokenizer object
+        normalized_raw_data (list[dict]): list json objects loaded from jsonl file.
+    Returns:
+        token_pool (list[str]): list of tokens.
+    """
     token_pool = []
     for data1 in normalized_raw_data:
         if raw_data_type == "type0":
@@ -129,9 +138,8 @@ def gen_token_pool_from_feature(raw_data_type, tokenizer, normalized_raw_data):
         else:
             raise NotImplementedError
         tokss = [tokenizer.tokenize(word) for word in words]
-        toks = reduce(lambda x, y: x + y, tokss, [])
+        toks = reduce(lambda x, y: x + y, tokss, [])  # 각 단어에서 나온 토큰들을 하나의 리스트로 합침
         token_pool += toks
-
     return token_pool
 
 
@@ -939,7 +947,8 @@ def get_adj_mat_funsd(fields, field_rs, raw_data1):
     return adj_mat_fg, cols
 
 
-def get_direction_vec(coord1, vertical1):
+def get_direction_vec(coord1: list[list[int]], vertical1: bool):
+    """text box의 방향 벡터 구하기. 짧은 변 중심들을 가로지르는 벡터"""
     c1, c2, c3, c4 = coord1
     # x1, y1 = c1
     # x2, y2 = c2
@@ -981,31 +990,38 @@ def get_coord1_first_char(coord1, dvec, vertical1, n_char11_offset, n_char11):
 
 
 def augment_coord(coord1, vertical1, l_tok1, method, text_tok1):
-    """
+    """assign xy coordinates to each token in the text box.
+    나같으면 함수 이름을 assign_coord_to_tokens로 할듯
 
     Args:
-        coord1: numpy ndarray
-        vertical1: bool
-        l_tok1: numeric
-        bag_of_words: bool
-
+        coord1 (numpy ndarray) coordinates of a text box. shape: (4, 2)
+        vertical1 (int): whether the text box is vertical. 0 or 1
+        l_tok1 (int): the number of tokens in the text box
+        method (str): "bag_of_words" or "equal_division" or "char_lv_equal_division"
+        text_tok1 (list[str]): list of tokens in the text box
     Returns:
-
+        coord_tok1 (list[np.ndarray]): coordinates of each token in the text box. shape: (l_tok1, 4, 2)
+        direction_vecs (list[np.ndarray]): direction vectors of each token in the text box. shape: (l_tok1, 2)
     """
+    # direction_vec = 텍스트 박스의 짧은 변 중심들을 가로지르는 벡터 좌표
     direction_vec = get_direction_vec(coord1, vertical1)
     direction_vecs = [direction_vec] * l_tok1
 
     if method == "bag_of_words":
+        # 모든 토큰에 대해서 텍스트 박스의 좌표 할당
         coord_tok1 = [coord1] * l_tok1
     elif method == "equal_division":
         """each token as if has single char width"""
         coord_tok1 = []
+        # 각 토큰에 대해서 텍스트 박스를 토큰 개수만큼 n 등분 해서 할당
         dvec_tok = direction_vec / l_tok1
+        # get_coord1_first_char: 텍스트 박스의 첫번째 토큰의 좌표를 계산하는 함수
         coord1_fc = get_coord1_first_char(
             coord1, dvec_tok, vertical1, n_char11_offset=0, n_char11=1
         )
 
         for i in range(l_tok1):
+            # 첫번째 토큰의 좌표를 텍스트 박스 방향대로 평행이동해가면서 각 토큰에 할당
             tok_pos = coord1_fc + i * dvec_tok
             coord_tok1.append(tok_pos.tolist())
 
@@ -1081,6 +1097,16 @@ def remove_blank_box(text, coord, vertical):
 
 
 def update_label_sub(l_tok1, rel_idx, r_pnt, c_pnt, label_sub1, type):
+    """update label_sub1 for new tokens
+    Args:
+        l_tok1(int): the number of tokens in the text box
+        rel_idx(int): relation index. element of adjancency matrix indicating there is a relation between two tokens.
+        r_pnt(int): row pointer
+        c_pnt(int): column pointer
+        label_sub1: adjancency matrix of shape (n_texts + n_fields, n_texts)
+        type: "f" or "g" or "root"
+    """
+
     def _insert_zero_row(arr, idx):
         n_row, n_col = arr.shape
         return np.insert(arr, obj=idx, values=[0] * n_col, axis=0)
@@ -1089,22 +1115,26 @@ def update_label_sub(l_tok1, rel_idx, r_pnt, c_pnt, label_sub1, type):
         n_row, n_col = arr.shape
         return np.insert(arr, obj=idx, values=[0] * n_row, axis=1)
 
-    # laberl_sub. List of adj_mat
+    # label_sub. List of adj_mat
+    # text에서 추출된 tokens 중 첫번째 token을 header 라고 부르는 것 같음
     r_pnt_header = r_pnt
     c_pnt_header = c_pnt
 
-    # label
     # remove arrow to the next boxes before augment label.
+    # next_box_col_idxs = r_pnt_header가 가르키는 text node와 연결된 text node들의 인덱스들
     next_box_col_idxs = np.where(label_sub1[r_pnt_header] == rel_idx)[0]
     if next_box_col_idxs.size > 0:
         # assert next_box_col_idxs.size == 1
         for next_box_col_idx in next_box_col_idxs:
             label_sub1[r_pnt_header, next_box_col_idx] = 0
             # make it zero as connection info needs to be moved to the final token
+            # create connection from the last token in this text box to the first token in the next text box
     else:
-        next_box_col_idx = None
+        # next_box_col_idx = None
+        next_box_col_idxs = None
 
     # insert zero column and row.
+    # 토큰 하나당 zero row and column 하나씩 추가
     for i in range(l_tok1 - 1):
         label_sub1 = _insert_zero_row(label_sub1, r_pnt_header + 1)
         label_sub1 = _insert_zero_col(label_sub1, c_pnt_header + 1)
@@ -1116,6 +1146,7 @@ def update_label_sub(l_tok1, rel_idx, r_pnt, c_pnt, label_sub1, type):
         c_pnt += 1
         # insert 1
         if type == "f":  # field group
+            # connect the previous token to the current token
             label_sub1[r_pnt - 1, c_pnt] = rel_idx
         elif type == "g":
             pass
@@ -1123,19 +1154,26 @@ def update_label_sub(l_tok1, rel_idx, r_pnt, c_pnt, label_sub1, type):
             pass
         else:
             raise NotImplementedError
+    # for문이 끝나면 pointer는 마지막 토큰을 가리키고 있음
 
     # re inserted previously removed arrows to the next boxes.
     if next_box_col_idxs is not None:
         # modify next_box_col_idx
         for next_box_col_idx in next_box_col_idxs:
             if next_box_col_idx <= c_pnt_header:
+                # header token 뒤에 새로운 row와 column이 추가되었으므로
+                # header token 보다 앞에 있는 text box들은 변화 없음
                 j = next_box_col_idx
             else:
+                # 연결된 박스가 header token 뒤에 있는 경우
+                # (토큰수-1) 만큼 row와 column이 추가되었으므로 평행이동
                 j = next_box_col_idx + (l_tok1 - 1)
 
             if type == "f":  # field group
+                # field relation은 현재 text box의 마지막 토큰에서 연결된 text box의 첫번째 토큰으로 연결
                 label_sub1[r_pnt, j] = rel_idx
             elif type == "g":
+                # group relation은 header tokend에서 연결된 text box의 header token으로 연결
                 label_sub1[r_pnt_header, j] = rel_idx
             elif type == "root":
                 pass

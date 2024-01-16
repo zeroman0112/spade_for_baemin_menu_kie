@@ -3,7 +3,6 @@
 # Apache License v2.0
 
 import json
-import multiprocessing
 import os
 import random
 import time
@@ -15,7 +14,7 @@ import yaml
 
 
 def remove_duplicate_in_1d_list(data_in: list):
-    assert type(data_in) == list
+    assert type(data_in) is list
     return list(OrderedDict.fromkeys(data_in))
 
 

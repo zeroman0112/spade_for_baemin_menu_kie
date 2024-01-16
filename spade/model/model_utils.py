@@ -5,7 +5,6 @@
 import math
 import os
 from collections import Iterable
-from copy import deepcopy
 from functools import reduce
 from pathlib import Path
 

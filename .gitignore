@@ -10,3 +10,4 @@ data/model
 data.tar.gz
 lightning_logs/
 core
+spade/.ipynb_checkpoints

@@ -1,5 +1,3 @@
-import transformers
-
 from spade.model.run_model import do_prediction, do_testing, do_training
 from spade.preprocess.preprocess import do_preprocess
 from spade.utils.config_manager import ConfigManager
