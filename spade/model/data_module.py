@@ -449,11 +449,27 @@ class SpadeData(torch.utils.data.Dataset):
             text, coord, vertical, label, augment_data, token_aug_params
         )
 
+        # validation logic for output shape
+        n_boxes = len(text)
+        n_tokens = len(text_tok)
+        assert np.array(coord_tok).shape == (n_tokens, 4, 2)
+        assert np.array(direction_vec).shape == (n_boxes, 2)
+        assert np.array(direction_vec_tok).shape == (n_tokens, 2)
+        assert np.array(vertical_tok).shape == (n_tokens,)
+        assert np.array(char_size_tok).shape == (n_tokens,)
+        assert np.array(label_tok).shape == (2, n_tokens + self.n_fields, n_tokens)
+        assert np.array(header_tok).shape == (n_tokens,)
+
         text_tok_id = self.tokenizer.convert_tokens_to_ids(text_tok)
+        assert len(text_tok_id) == n_tokens
 
         rel_center_tok, rel_dist_tok, rel_angle_tok = self.gen_rel_position(
             coord_tok, direction_vec_tok
         )
+        assert np.array(rel_center_tok).shape == (n_tokens, n_tokens, 2)
+        assert np.array(rel_dist_tok).shape == (n_tokens, n_tokens)
+        assert np.array(rel_angle_tok).shape == (n_tokens, n_tokens)
+
         rn_center_tok, rn_dist_tok, rn_angle_tok = self.normalize(
             rel_center_tok, rel_dist_tok, rel_angle_tok, img_sz, char_size_tok
         )
@@ -515,14 +531,13 @@ class SpadeData(torch.utils.data.Dataset):
             label (list[list[list[int]]]): semantic label and group label on text boxes
                 of shape (2, n_field + n_text, n_text)
             augment_data (bool): whether to augment data
-            token_aug_params (list[int]): token augmentation parameters
+            token_aug_params (list[int] or list[list[int]]): token augmentation parameters
 
         Returns:
-            text_tok (list[list[str]]): list of list of tokens from OCR result.
-                len(text_tok) = n_boxes
-                text_tok[i] = list of tokens from the i-th text box (e.g. ["hello", "world"])
-            coord_tok (list[list[list[int]]]): list of coordinates of text tokens
-                len(coord_tok) = n_boxes. coord_tok[i] = list of coordinates of tokens from the i-th text box
+            text_tok (list[str]): list of concatednated tokens from all infer text of OCR result.
+                len(text_tok) = n_total_tokens
+            coord_tok (list[list[list[float]]]): list of coordinates of text tokens
+                of shape (n_total_tokens, 4, 2)
             direction_vec (list[list[int]]): list of direction vectors of text boxes
                 len(direction_vec) = n_boxes,
                 direction_vec[i] = i번째 text box의 짧은 변들의 중심점을 연결한 벡터
@@ -538,11 +553,12 @@ class SpadeData(torch.utils.data.Dataset):
                 ith_text_box_char_size = i번째 text box의 긴 변들의 평균 길이
             label_tok (list[np.ndarray]): semantic label and group label on text tokens
                 len(label_tok) = 2
-                label_tok[0] = semantic relation label on text tokens which is represented as adjacent matrix
-                label_tok[1] = group relation label on text tokens which is represented as adjacent matrix
+                label_tok[0] = semantic relation label on tokens which is represented as adjacent matrix
+                label_tok[1] = group relation label on tokens which is represented as adjacent matrix
             header_tok (np.ndarray): indicator which token is a header token of shape (n_total_tokens,)
                 n_total_tokens = 모든 text box에서 나온 tokens의 개수
                 header_tok[i] = 1 if the i-th token is a header token else 0
+                header token은 각 텍스트 박스의 첫번째 토큰을 말함
         """
         if self.mode != "infer":
             pass
@@ -552,23 +568,12 @@ class SpadeData(torch.utils.data.Dataset):
             label = np.zeros([1, self.n_fields + len(text), len(text)])
 
         rel_idx = 1
-        # len(text_tok) = n_boxes
-        # text_tok[i] = list of tokens from the i-th text box (e.g. ["hello", "world"])
         text_tok = []
-        # len(vertical_tok) = n_boxes
-        # vertical_tok[i] = list of is_vertical from the i-th text box
         vertical_tok = []
-        # len(coord_tok) = n_boxes
-        # coord_tok[i] = i번째 text box 에서 추출한 token 각각의 좌표 (e.g. [[x1, y1], [x2, y2], [x3, y3], [x4, y4]])
         coord_tok = []
-        # len(char_size_tok) = n_boxes
-        # char_size_tok[i] = text box의 긴변의 평균
         char_size_tok = []
-        # len(direction_vec) = n_boxes
-        # direction_vec[i] = i번째 text box의 짧은 변들의 중심점을 연결한 벡터
         direction_vec = []
-        # direction_vec_tok[i] = [direction_vec] * len(text_tok[i])
-        direction_vec_tok = []  # shape of (n_boxes, n_tokens, 2)
+        direction_vec_tok = []
 
         header_tok = np.ones(len(text), dtype=np.int64)
         r_pnt = self.n_fields - 1  # row pointer for label which is adjacent matrix
@@ -579,9 +584,9 @@ class SpadeData(torch.utils.data.Dataset):
             # vertical = Whether the text box is vertical or not
             text1, coord1, vertical1 = sub_features1
             text_tok1 = du.tokenizing_func(self.tokenizer, text1)
-            # randomly replace some text tokens with other tokens
-            # 메뉴 입력 자동화 모델에는 사용 안하는게 나을듯
             if augment_data:
+                # 메뉴 입력 자동화 모델에는 사용 안하는게 나을듯
+                # randomly replace some tokens with other tokens
                 text_tok1 = du.gen_augmented_text_tok1(
                     self.token_pool, text_tok1, token_aug_params
                 )
@@ -595,9 +600,7 @@ class SpadeData(torch.utils.data.Dataset):
             # csz_tok1 = [csz] * l_tok1
             csz_tok1 = du.augment_char_size(csz, l_tok1)
 
-            # du.augment_coord 랑 self.augment_coord 랑 햇갈림. 변수이름 바꾸는게 좋을듯
-            # text에서 추출한 각 토큰에 대한 좌표를 할당
-            # method_for_token_xy_generation = "equal_division" 인 경우, text box를 토큰 수만큼 쪼개서 할당
+            # du.augment_coord 랑 self.augment_coord 랑 햇갈림. 함수이름 다른걸로 바꾸는게 좋을듯
             coord_tok1, direction_vec_tok1 = du.augment_coord(
                 coord1,
                 vertical1,
@@ -605,6 +608,8 @@ class SpadeData(torch.utils.data.Dataset):
                 self.method_for_token_xy_generation,
                 text_tok1,
             )
+            assert len(text_tok1) == len(coord_tok1)
+            assert np.array(coord_tok1[0]).shape == (4, 2)
 
             # text_tok.append(text_tok1)
             # coord_tok.append(coord_tok1)
@@ -668,21 +673,43 @@ class SpadeData(torch.utils.data.Dataset):
         return center
 
     def get_angle(self, vec1, vec2):
+        """
+        Args:
+            vec1 (np.ndarray) : vector of shape (2,)
+            vec2 (np.ndarray) : vector of shape (2,)
+        Returns:
+            angle (float) : angle between vec1 and vec2
+        """
         v1 = np.array(vec1)
         v2 = np.array(vec2)
 
         u1 = v1 / np.linalg.norm(v1)
         u2 = v2 / np.linalg.norm(v2)
 
+        # arccos is inverse of cosine: 0 ~ pi
         angle = np.arccos(np.clip(np.dot(u1, u2), -1, 1))
         return angle
 
     def gen_rel_position(self, coord, direction_vec):
+        """
+        Args:
+            coord (np.ndarray) : box coordinates for tokens of shape (n_tokens, 4, 2)
+            direction_vec (np.ndarray) : direction vectors of shape (n_tokens, 2)
+        Returns:
+            rel_center (np.ndarray) : relative center of shape (n_tokens, n_tokens, 2)
+                rel_center[i, j] = {center vector of the j-th token box} - {center vector of the i-th token box}
+            rel_dist (np.ndarray) : relative distance of shape (n_tokens, n_tokens)
+                rel_dist[i, j] = distance between centers of the i-th and j-th token boxs
+            rel_angle (np.ndarray) : relative angle of shape (n_tokens, n_tokens).
+                rel_angle[i, j] = angle between direction vectors of the i-th and j-th token boxs
+        """
         coord = np.array(coord)
         center = self.get_center(coord)
+        assert np.array(center).shape == (len(coord), 2)
+
         n_box = len(coord)
-        rel_center = []
-        rel_angle = np.zeros([n_box, n_box])
+        rel_center = []  # rel_center is relative center
+        rel_angle = np.zeros([n_box, n_box])  # rel_angle is relative angle
 
         for i_box in range(n_box):
             base_direction_vec1 = direction_vec[i_box]

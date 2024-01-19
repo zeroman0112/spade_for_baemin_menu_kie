@@ -994,7 +994,8 @@ def augment_coord(coord1, vertical1, l_tok1, method, text_tok1):
     나같으면 함수 이름을 assign_coord_to_tokens로 할듯
 
     Args:
-        coord1 (numpy ndarray) coordinates of a text box. shape: (4, 2)
+        coord1 (list[np.ndarray]) coordinates of a text box. len(coord1) is 4.
+            each element is a numpy array of shape (2,) which means xy coordinates.
         vertical1 (int): whether the text box is vertical. 0 or 1
         l_tok1 (int): the number of tokens in the text box
         method (str): "bag_of_words" or "equal_division" or "char_lv_equal_division"
@@ -1226,6 +1227,19 @@ def char_height_normalization(n_char_unit, char_height):
 def dist_normalization(
     dist_norm, n_dist_unit, arr, img_sz, char_height, all_positive=False
 ):
+    """normalize distance array
+    Args:
+        dist_norm (str): distance normalization method, "char_height" or "img_diagonal".
+        n_dist_unit (int): the number of distance unit
+        arr (np.ndarray): array of distance
+        img_sz (dict): image size. {"height": int, "width": int}
+        char_height (list[int]): list of character height
+        all_positive (bool): whether all values are positive or not
+    Returns:
+        new_arr (np.ndarray): normalized array of distance.
+            if all_positive is True, the values are in [0, n_dist_unit].
+            else if all_positive is False, the values are in [-n_dist_unit, n_dist_unit].
+    """
     h = img_sz["height"]
     w = img_sz["width"]
 
@@ -1243,5 +1257,6 @@ def dist_normalization(
 
 
 def angle_normalization(n_angle_unit, arr):
+    """ normalize angle array. return values are in [0, n_angle_unit]"""
     new_arr = np.clip(arr / (2 * np.pi) * n_angle_unit, 0, n_angle_unit)
     return new_arr.astype(np.int64)

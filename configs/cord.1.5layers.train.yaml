@@ -163,7 +163,7 @@ train_param:
       num_warmup_steps: 30
   max_epochs: 10000
   multi_gpu: true
-  n_cpus: 4
+  n_cpus: 1 
   optimizer_type: adam
   save_epoch_interval: 500
   skip_long: true
