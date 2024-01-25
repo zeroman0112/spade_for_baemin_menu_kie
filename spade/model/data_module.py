@@ -24,6 +24,7 @@ class SpadeDataModule(pl.LightningDataModule):
         self.batch_size = cfg.train_param.batch_size
         self.batch_size_for_test = cfg.train_param.batch_size_for_test
         self.cfg = cfg
+        # 이 부분 infoxlm tokenizer 사용하도록 수정 필요
         self.tokenizer = mu.get_tokenizer(
             cfg.path_data_folder,
             cfg.model_param.encoder_backbone_name,
@@ -264,6 +265,7 @@ class SpadeData(torch.utils.data.Dataset):
         self.raw_data_input_type = cfg.raw_data_input_type  # e.g. "type0", "type1"
         print(self.raw_data_input_type)
 
+        # preprocessing raw data
         self.data = self._normalize_raw_data(raw_data)
 
         self.token_pool = du.gen_token_pool(
@@ -338,7 +340,7 @@ class SpadeData(torch.utils.data.Dataset):
             )
         return feature
 
-    def _normalize_raw_data(self, raw_data):
+    def _normalize_raw_data(self, raw_data: str):
         if self.raw_data_input_type == "type0":
             data = self._normalize_raw_data_type0(raw_data)
 
@@ -350,7 +352,7 @@ class SpadeData(torch.utils.data.Dataset):
 
         return data
 
-    def _normalize_raw_data_type0(self, raw_data):
+    def _normalize_raw_data_type0(self, raw_data: list[dict]):
         data = []
         for raw_data1 in raw_data:
             t1 = {}

@@ -6,6 +6,7 @@ import json
 import os
 import random as python_random
 from functools import reduce
+from typing import Any
 
 import numpy as np
 import requests
@@ -212,7 +213,9 @@ def quad2list2(quad):
     ]
 
 
-def get_label_and_feature(raw_data1, task, fields, field_rs):
+def get_label_and_feature(
+    raw_data1: dict, task: str, fields: list[str], field_rs: list[str]
+):
     if task == "receipt_v1":
         label, feature = get_adj_mat_receipt_v1(fields, field_rs, raw_data1)
     elif task == "funsd":
@@ -223,7 +226,7 @@ def get_label_and_feature(raw_data1, task, fields, field_rs):
     return label, feature
 
 
-def get_label_and_feature_infer_mode(task, raw_data1):
+def get_label_and_feature_infer_mode(task: str, raw_data1: dict):
     label = None
     if task in ["receipt_v1"]:
         feature = [
@@ -239,7 +242,7 @@ def get_label_and_feature_infer_mode(task, raw_data1):
     return label, feature, confidence, img_sz, data_id
 
 
-def get_meta_feature(task, raw_data1, feature):
+def get_meta_feature(task: str, raw_data1: dict, feature):
     if task in ["receipt_v1", "funsd"]:
         img_sz = raw_data1["meta"]["image_size"]
         confidence = [1] * len(feature)
@@ -253,6 +256,11 @@ def get_meta_feature(task, raw_data1, feature):
 def quad2list2_receipt_v1(quad):
     """
     convert to list of list
+
+    c1 ---------- c2
+    |              |
+    |              |
+    c4 ---------- c3
     """
 
     return [
@@ -279,7 +287,7 @@ def coord_to_quad_receipt_v1(coord):
 
 
 def gen_sorted_features_grouped_by_field(
-    fields, all_unsorted_features_grouped_by_field
+    fields: list[str], all_unsorted_features_grouped_by_field: list[dict]
 ):
     # file open and get text
     sorted_features_grouped_by_field = []  # ordered
@@ -299,6 +307,7 @@ def gen_sorted_features_grouped_by_field(
     for (
         all_unsorted_features_grouped_by_field1
     ) in all_unsorted_features_grouped_by_field:
+        # field_of_feature is category of a group of text segments
         field_of_feature = all_unsorted_features_grouped_by_field1["category"]
         gid = all_unsorted_features_grouped_by_field1["group_id"]
         segments = all_unsorted_features_grouped_by_field1["words"]
@@ -321,8 +330,8 @@ def gen_sorted_features_grouped_by_field(
         feature_unsorted = []
         for segment in segments:
             text = segment["text"]
-            row_id = segment["row_id"]
-            quad = segment["quad"]
+            row_id = segment["row_id"]  # 같은 줄에 있으면 같은 row_id를 가짐
+            quad = segment["quad"]  # text segment의 bounding box 좌표
             coord = quad2list2_receipt_v1(quad)
             x1 = quad["x1"]
             is_key = segment["is_key"]
@@ -332,26 +341,29 @@ def gen_sorted_features_grouped_by_field(
                     (
                         text,
                         coord,
-                        0,
+                        0,  # is_vertical is 0. always horizontal.
                         gid,
                         flag_field_of_interest,
                         is_key,
                         row_id,
                         x1,
-                    )  # always horizontal.
+                    )
                 )
 
         # 1. row sort
         feature_row_sorted = sorted(feature_unsorted, key=lambda x: x[-2])
         # 2. x-sort while conserving row-order
         rid = [x[-2] for x in feature_row_sorted]
+
         rid_b = np.diff(rid)  # boundary
-        assert sum(rid_b < 0) == 0
+        assert sum(rid_b < 0) == 0  # row_id should be increasing
         idx_bs = (
             np.nonzero(rid_b)[0] + 1
         )  # boundary idx. idx in a sence of "pythonic" (it is of between elements)
         # add final boundary (end-point)
         idx_bs = np.append(idx_bs, len(feature_row_sorted))
+        # e.g. rid = [1, 1, 1, 2, 2, 3, 3, 3, 3, 4, 5]
+        # idx_bs = [3, 5, 9, 10, 11]
 
         feature_sorted = []  # now x1-based sort
         st = 0
@@ -378,38 +390,64 @@ def gen_sorted_features_grouped_by_field(
 
 
 def gen_adj_mat_f_and_cols(
-    sorted_features_grouped_by_field,
-    row_offset,
-    n_row,
-    n_col,
-    braced_fields,
-    braced_field_rs,
+    sorted_features_grouped_by_field: list[list[Any]],
+    row_offset: int,
+    n_row: int,
+    n_col: int,
+    braced_fields: list[str],
+    braced_field_rs: list[str],
 ):
-    id_offset_field_to_first_box = 1000000
+    """generate adjacency matrix for field(category) relation label
+
+    data:
+        category: menu.name
+        group_id: 0
+        text_boxes:
+            - text_box1
+                - text: "kimchi"
+                - coord: [[100, 200], [200, 200], [200, 300], [100, 300]]
+                - is_key: 0
+            - text_box2
+                - text: "jjigae"
+                - coord: ...
+                - is_key: 1
+
+    adj_mat_f: adjacency matrix for field
+        menu.name -> text_box1 -> text_box2
+        adj_mat_f[index of menu.name, index of text_box1] = 1
+        adj_mat_f[index of text_box1, index of text_box2] = 1
+
+    """
+    id_offset_field_to_first_box = 1_000_000
     adj_mat_f = np.zeros([n_row, n_col], dtype=int)  # field
-    cols = []
+    cols = []  # text box feature
     col_ids_rp = []  # representers
     col_ids_non_key_header = []  # first segment of each field-group.
     col_gids = []
-    i_col = -1
+    i_col = -1  # column id (text box index)
     for sorted_features_grouped_by_field1 in sorted_features_grouped_by_field:
         label_aug = sorted_features_grouped_by_field1[0]
         feature = sorted_features_grouped_by_field1[1:]
-        field_of_feature = label_aug[0]
+        field_of_feature = label_aug[0]  # category
 
         non_key_header_found = False
+        # non_key_header_found = whether the first text box with is_key=0 of a field is found
         if field_of_feature in braced_fields:
             most_recent_non_key_col_id = (
-                braced_fields.index(field_of_feature) + id_offset_field_to_first_box
+                braced_fields.index(field_of_feature)
+                + id_offset_field_to_first_box
+                # 처음에는 category id 에다 offset 더한 것
             )
             # + 1000000 to avoid the case where col_id == field_id which casues duplicate field to first boxes edges.
 
+        # feature contains an infer text and bounding box coordinates and etc. of a text segment
         for i_feat, feature1 in enumerate(feature):
+            # feature1 = [text, coord, is_vertical, gid, flag_field_of_interest, is_key, row_id, x1]
             is_key = feature1[5]
             assert is_key == 0 or is_key == 1
 
             i_col += 1
-            i_row = i_col + row_offset
+            # i_row = i_col + row_offset
             cols.append(feature1[:3])
             col_gids.append(feature1[3])
 
@@ -432,13 +470,14 @@ def gen_adj_mat_f_and_cols(
                     if most_recent_non_key_col_id == (
                         braced_fields.index(field_of_feature)
                         + id_offset_field_to_first_box
-                    ):
+                    ):  # If i_col indicates the first non-key text box
                         adj_mat_f[
                             most_recent_non_key_col_id - id_offset_field_to_first_box,
                             i_col,
-                        ] = 1
+                        ] = 1  # connect field node to first non-key text box node
                     else:
                         adj_mat_f[row_offset + most_recent_non_key_col_id, i_col] = 1
+                        # connect previous non-key text box node to current non-key text box node
                     most_recent_non_key_col_id = i_col
 
     assert n_col == i_col + 1
@@ -447,17 +486,24 @@ def gen_adj_mat_f_and_cols(
 
 
 def gen_adj_mat_g(
-    row_offset, n_row, n_col, col_ids_rp, col_ids_non_key_header, col_gids
+    row_offset: int,
+    n_row: int,
+    n_col: int,
+    col_ids_rp: list[int],
+    col_ids_non_key_header: list[int],
+    col_gids: list[int],
 ):
+    """generate adjacency matrix for group relation label"""
     adj_mat_g = np.zeros([n_row, n_col], dtype=int)  # group
     for col_id_rp in col_ids_rp:
+        # col_id_rp: representer field의 첫번째 text box의 index
         target_gid = col_gids[col_id_rp]
         target_col_ids = [
             col_id
             for col_id, gid in enumerate(col_gids)
-            if (gid == target_gid)
-            and (col_id != col_id_rp)
-            and (col_id in col_ids_non_key_header)
+            if (gid == target_gid)  # 같은 그룹에 속하는 text box
+            and (col_id != col_id_rp)  # representer field의 첫번째 text box는 제외
+            and (col_id in col_ids_non_key_header)  # 각 필드에서 key가 아닌 첫번째 text box
         ]
 
         mu = row_offset + col_id_rp
@@ -467,24 +513,37 @@ def gen_adj_mat_g(
     return adj_mat_g
 
 
-def get_field_collecting_idxs(gid_and_fields, gid_and_fields_unique):
+def get_field_collecting_idxs(
+    gid_and_fields: list[tuple], gid_and_fields_unique: list[tuple]
+):
     field_collecting_idxs = []
     for gid_and_field_ref in gid_and_fields_unique:
         collecting_idx_bool = [x == gid_and_field_ref for x in gid_and_fields]
         collecting_idx = np.nonzero(collecting_idx_bool)[0].tolist()
         field_collecting_idxs.append(collecting_idx)
 
+    # fields_collecting_idxs[i] = gid_and_fields_unique[i]와 같은 값을 가진 element들의 list of indices
     return field_collecting_idxs
 
 
-def recollect_fields(all_unsorted_features_grouped_by_field):
-    # recollect unnecessarily separted fields in GT
+def recollect_fields(all_unsorted_features_grouped_by_field: list[dict]):
+    # recollect unnecessarily separated fields in GT
+    # 예를 들어서 cateogry가 menu.name이고 group_id가 0 인 "김치찌개"가
+    # "김치", "찌개"로 쪼개져 있었던 것을 다시 합침
     gid_and_fields = [
         (x["group_id"], x["category"]) for x in all_unsorted_features_grouped_by_field
     ]
     gid_and_fields_unique = gu.remove_duplicate_in_1d_list(gid_and_fields)
     field_collecting_idxs = get_field_collecting_idxs(
         gid_and_fields, gid_and_fields_unique
+    )
+    # validation on get_field_collecting_idxs function
+    j = python_random.randint(0, len(gid_and_fields_unique) - 1)
+    assert all(
+        [
+            gid_and_fields[i] == gid_and_fields_unique[j]
+            for i in field_collecting_idxs[j]
+        ]
     )
 
     # generation
@@ -493,12 +552,15 @@ def recollect_fields(all_unsorted_features_grouped_by_field):
         field_collecting_idxs, gid_and_fields_unique
     ):
         # insert
-        gid, field_of_feature = gid_and_fields_unique1
+        (
+            gid,
+            field_of_feature,
+        ) = gid_and_fields_unique1  # field_of_feature is category of text segment
         words = []
         for field_collecting_idx1 in field_collecting_idx:
             words += all_unsorted_features_grouped_by_field[field_collecting_idx1][
                 "words"
-            ]
+            ]  # 하나의 필드가 불필요하게 쪼개져 있었나 봄. 예를 들어서 "김치찌개"가 "김치", "찌개"로 쪼개져 있었던 것.
         all_unsorted_features_grouped_by_recollected_field.append(
             {"group_id": gid, "category": field_of_feature, "words": words}
         )
@@ -517,11 +579,15 @@ def recollect_fields(all_unsorted_features_grouped_by_field):
     return all_unsorted_features_grouped_by_recollected_field
 
 
-def get_adj_mat_receipt_v1(fields, field_rs, raw_data1, verbose=False):
+def get_adj_mat_receipt_v1(
+    fields: list[str], field_rs: list[str], raw_data1: dict, verbose=False
+):
     """
     raw_data1.keys(): ['dontcare', 'valid_line', 'meta', 'roi', 'repeating_symbol']
 
     raw_data1['valid_line'][0].keys(): ['words', 'category', 'group_id']
+    raw_data1['valid_line']의 요소는 하나의 필드를 의미한다.
+    group_id가 같으면 같은 그룹에 속하는 필드이다.
 
         "group_id": null if "O" otherwise, it indicates literally "group" info. integer.
         "category": null if "O" otherwise, it indicates sub-group category. e.g.) "menu.discountprice"
@@ -541,18 +607,26 @@ def get_adj_mat_receipt_v1(fields, field_rs, raw_data1, verbose=False):
     all_unsorted_features_grouped_by_field = raw_data1["valid_line"]
     # cols = [ (text1, coord1, vertical1, gid, flag_field_of_interest, is_key, row_id, x1), (), ... ]
 
-    # 2. Combine fields having same gid
+    # 2. Combine fields having same group id and category
     all_unsorted_features_grouped_by_recollected_field = recollect_fields(
         all_unsorted_features_grouped_by_field
     )
 
+    # 3. sort text segments within a field by row_id and x1 coordinate
     sorted_features_grouped_by_field = gen_sorted_features_grouped_by_field(
         fields, all_unsorted_features_grouped_by_recollected_field
     )
 
+    # validation logic on gen_sorted_features_grouped_by_field
+    assert len(sorted_features_grouped_by_field) == len(
+        all_unsorted_features_grouped_by_recollected_field
+    )
+    # sorted_features_grouped_by_field[0][0], 첫번째 아이템의 첫번째 요소는 label이다.
+    # sorted_features_grouped_by_field[0][1:], 첫번째 아이템의 두번째 요소부터는 text box들이다.
+
     # 3. adj_mat making
     row_offset = len(fields)
-    n_col = sum(
+    n_col = sum(  # n_col = 이미지에서 나온 모든 text box 개수
         [
             len(label_and_feature[1:])
             for label_and_feature in sorted_features_grouped_by_field
@@ -560,14 +634,16 @@ def get_adj_mat_receipt_v1(fields, field_rs, raw_data1, verbose=False):
     )
     n_row = n_col + len(fields)
     braced_fields = [f"[{f1}]" for f1 in fields]
-    braced_field_rs = [f"[{f1}]" for f1 in field_rs]
+    braced_field_rs = [
+        f"[{f1}]" for f1 in field_rs
+    ]  # field_rs: the representative field of group
 
     (
-        adj_mat_f,
-        cols,
-        col_ids_rp,
-        col_ids_non_key_header,
-        col_gids,
+        adj_mat_f,  # adjacency matrix for field relation
+        cols,  # [(text: str, coord: list[list[int]], is_vertical: int), ... ]
+        col_ids_rp,  # the first non-key text box of representer fields
+        col_ids_non_key_header,  # the first non-key text box of each field
+        col_gids,  # group id of each text box
     ) = gen_adj_mat_f_and_cols(
         sorted_features_grouped_by_field,
         row_offset,
@@ -577,7 +653,11 @@ def get_adj_mat_receipt_v1(fields, field_rs, raw_data1, verbose=False):
         braced_field_rs,
     )
 
-    adj_mat_g = gen_adj_mat_g(
+    assert adj_mat_f.shape == (n_row, n_col)
+    assert len(cols) == n_col
+    assert len(col_gids) == n_col
+
+    adj_mat_g = gen_adj_mat_g(  # adjacency matrix for group relation
         row_offset, n_row, n_col, col_ids_rp, col_ids_non_key_header, col_gids
     )
 
@@ -1257,6 +1337,6 @@ def dist_normalization(
 
 
 def angle_normalization(n_angle_unit, arr):
-    """ normalize angle array. return values are in [0, n_angle_unit]"""
+    """normalize angle array. return values are in [0, n_angle_unit]"""
     new_arr = np.clip(arr / (2 * np.pi) * n_angle_unit, 0, n_angle_unit)
     return new_arr.astype(np.int64)
